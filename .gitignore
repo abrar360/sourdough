@@ -1,0 +1,9 @@
+cache/
+runs/
+wandb/
+videos/
+submissions/
+tests/_scratch/
+.ipynb_checkpoints/
+__pycache__/
+*.pt

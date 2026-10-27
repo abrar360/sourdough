@@ -1,0 +1,39 @@
+# Harness options are top-level; experiment options live under `params` and are read only by the
+# experiment class named in `experiment`.
+name: example
+out_dir: runs
+seed: 0
+device: auto
+
+experiment: experiments.example:Experiment
+params:
+  num_classes: 5
+  H: 96
+  W: 128
+  n_train: 256
+  n_val: 32
+  widths: [16, 32, 64]
+  latent: 4
+  viz_samples: 2
+
+epochs: 10
+batch_size: 16
+lr: 1.0e-3
+weight_decay: 1.0e-4
+pct_start: 0.05
+grad_clip: 1.0
+amp: auto                # bf16 on CUDA
+compile: auto            # torch.compile on CUDA
+compile_mode: default
+channels_last: true
+
+eval_every: 1
+select_metric: val/acc   # any logged "<split>/<key>"
+select_mode: max
+log_every: 50
+
+wandb_project: experiments
+wandb_entity: null
+wandb_mode: disabled     # online | offline | disabled
+wandb_group: null
+wandb_tags: []
