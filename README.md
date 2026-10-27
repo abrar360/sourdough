@@ -67,3 +67,7 @@ Nested `params` merge with the base rather than replacing it. Finished runs are 
 See `configs/base.yaml`; every top-level key is a field of `trainlib.config.Config`, and all of
 them can be overridden on the command line with YAML-syntax values (`levels=[8,8]`,
 `wandb_tags=[a,b]`, `params.flag=true`).
+
+## License
+
+MIT, see `LICENSE`.
