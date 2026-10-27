@@ -8,7 +8,7 @@ experiment to the next; an `Experiment` subclass owns what is not.
 | harness (`trainlib/`) | experiment (`experiments/<name>.py`) |
 |---|---|
 | config file, `key=value` overrides, sweeps | data and splits |
-| AdamW + OneCycle, grad clipping, bf16, `torch.compile` | model |
+| AdamW, warmup + cosine/constant lr, grad clipping, bf16, `torch.compile` | model |
 | epoch means, wandb logging, run directory | loss, stats, eval metrics |
 | `best.pt` / `final.pt` selection | figures |
 
@@ -57,6 +57,17 @@ batch means.
 
 **Selection.** `select_metric` names any logged `<split>/<key>`; `select_mode` is `min` or `max`.
 Keep one split for selection and another, never used for it, as the clean test number.
+
+**Long runs and annealing.** `decay: none` trains at a constant lr after warmup, so a run can go
+on as long as it keeps improving. To anneal from where it stopped improving, start a new run from
+its checkpoint with the optimizer state restored and no warmup:
+
+```bash
+python train.py --config c.yaml name=long   decay=none epochs=5000
+python train.py --config c.yaml name=anneal init_from=runs/long/best.pt warmup_steps=0 epochs=100
+```
+
+`weights_only: true` loads only the weights (a cold optimizer and a warmup), for fine-tuning.
 
 **Sweeps.** A sweep file names a base config, a wandb group, `common` overrides, and a list of
 runs; each run's keys are overrides on top of that. Finished runs are skipped.

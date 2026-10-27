@@ -18,7 +18,10 @@ epochs: 10
 batch_size: 16
 lr: 1.0e-3
 weight_decay: 1.0e-4
-pct_start: 0.05
+warmup_steps: 20
+decay: cosine
+init_from: null
+weights_only: false
 grad_clip: 1.0
 amp: true
 compile: true

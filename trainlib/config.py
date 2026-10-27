@@ -23,9 +23,12 @@ class Config:
 
     epochs: int = 10
     batch_size: int = 16
-    lr: float = 1e-3                 # AdamW peak lr under a OneCycle schedule
+    lr: float = 1e-3                 # AdamW peak lr
     weight_decay: float = 1e-4
-    pct_start: float = 0.05          # OneCycle warmup fraction
+    warmup_steps: int = 100          # linear ramp from 0 to lr over this many optimizer steps
+    decay: str = "cosine"            # "cosine" (to 0 after warmup) | "none" (flat)
+    init_from: str = None            # checkpoint to continue from (weights + optimizer state)
+    weights_only: bool = False       # init_from: load the weights but start the optimizer cold
     grad_clip: float = 1.0           # 0 disables
     amp: bool = True                 # bf16 autocast (CUDA only)
     compile: bool = True             # torch.compile (CUDA only)

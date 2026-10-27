@@ -35,6 +35,15 @@ if __name__ == "__main__":
     m = run("smoke_overrides", "params.latent=2", "params.data_on_cpu=true", "select_metric=val/loss", "select_mode=min")
     assert m["best_epoch"] in (1, 2)
 
+    # constant-lr run, then an anneal continued from its best checkpoint with the optimizer restored
+    m = run("smoke_const", "decay=none", "warmup_steps=12", "epochs=4")   # 6 steps/epoch
+    h = json.loads((SCRATCH / "runs" / "smoke_const" / "history.json").read_text())
+    assert abs(h[-1]["lr"] - 1e-3) < 1e-9 and h[0]["lr"] < h[-1]["lr"], [r["lr"] for r in h]
+    m = run("smoke_anneal", f"init_from={SCRATCH / 'runs' / 'smoke_const' / 'best.pt'}", "warmup_steps=0")
+    h = json.loads((SCRATCH / "runs" / "smoke_anneal" / "history.json").read_text())
+    assert h[-1]["lr"] < 1e-5, h[-1]["lr"]
+    run("smoke_finetune", f"init_from={SCRATCH / 'runs' / 'smoke_const' / 'best.pt'}", "weights_only=true")
+
     subprocess.run([sys.executable, "sweep.py", "configs/sweeps/example.yaml", "--dry-run", "--only", "latent8", "epochs=1"],
                    cwd=ROOT, check=True)
     shutil.rmtree(SCRATCH)

@@ -1,8 +1,9 @@
 """The training loop. Experiment-agnostic: data, model, loss, metrics and plots come from the
-Experiment; this file owns AdamW + OneCycle, AMP, torch.compile, grad clipping, running means,
-wandb logging, checkpoints and the run directory."""
+Experiment; this file owns AdamW + warmup/decay schedule, AMP, torch.compile, grad clipping,
+running means, wandb logging, checkpoints and the run directory."""
 import contextlib
 import json
+import math
 import time
 from pathlib import Path
 
@@ -29,6 +30,19 @@ def pick_device(name):
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def lr_lambda(cfg, total_steps):
+    """Linear warmup over `warmup_steps`, then cosine to 0 or flat for the rest of the run."""
+    warm = min(cfg.warmup_steps, total_steps)
+
+    def f(step):
+        if step < warm:
+            return (step + 1) / warm
+        if cfg.decay == "none":
+            return 1.0
+        return 0.5 * (1 + math.cos(math.pi * (step - warm) / max(total_steps - warm, 1)))
+    return f
 
 
 def train(cfg: Config):
@@ -58,13 +72,19 @@ def train(cfg: Config):
     steps_per_epoch = len(train_split) // cfg.batch_size
     assert steps_per_epoch > 0, "batch_size larger than the training set"
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, fused=cuda)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=cfg.lr, total_steps=cfg.epochs * steps_per_epoch, pct_start=cfg.pct_start)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda(cfg, cfg.epochs * steps_per_epoch))
+    if cfg.init_from:
+        ckpt = torch.load(cfg.init_from, map_location=device)
+        model.load_state_dict(ckpt["model"])
+        if not cfg.weights_only:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        print(f"initialised from {cfg.init_from} (epoch {ckpt['epoch']}, optimizer {'cold' if cfg.weights_only else 'restored'})")
     run_model = torch.compile(model) if cuda and cfg.compile else model
     logger = Logger(cfg, info)
 
     def save(path, epoch, **extra):
-        torch.save({"model": model.state_dict(), "config": cfg.to_dict(), "info": info, "epoch": epoch, **extra}, path)
+        torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "config": cfg.to_dict(), "info": info, "epoch": epoch, **extra}, path)
 
     better = (lambda a, b: a > b) if cfg.select_mode == "max" else (lambda a, b: a < b)
     best = best_epoch = None
