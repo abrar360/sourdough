@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-"""Run a list of configured runs one after another on this machine.
+"""Run a list of configured runs one after another.
 
-    python sweep.py configs/sweeps/example.yaml                 # run everything
-    python sweep.py configs/sweeps/example.yaml --dry-run       # just print the commands
-    python sweep.py configs/sweeps/example.yaml --only latent8 epochs=1   # subset + extra overrides
+    python sweep.py configs/sweeps/example.yaml                        # run everything
+    python sweep.py configs/sweeps/example.yaml --dry-run              # print the commands
+    python sweep.py configs/sweeps/example.yaml --only latent8 epochs=1   # subset, extra overrides
 
-Sweep file format:
+Sweep file:
     base: configs/base.yaml        # starting config
-    group: example-latent          # wandb group (defaults to the sweep file stem)
+    group: example-latent          # wandb group (default: the sweep file stem)
     common: {epochs: 10}           # overrides applied to every run
     runs:
-      - name: latent8
-        params: {latent: 8}        # nested params merge with the base config
+      - name: latent8              # -> runs/latent8
+        params: {latent: 8}        # nested keys merge with the base config
         lr: 2.0e-3
 
-Finished runs (runs/<name>/metrics.json exists) are skipped unless --force.
+Finished runs (metrics.json exists) are skipped unless --force.
 """
 import argparse
 import json
@@ -25,47 +25,46 @@ from pathlib import Path
 import yaml
 
 
+def flatten(d, prefix=""):
+    """{"params": {"latent": 8}, "lr": 1} -> ["params.latent=8", "lr=1"]"""
+    for k, v in d.items():
+        if isinstance(v, dict):
+            yield from flatten(v, f"{prefix}{k}.")
+        else:
+            yield f"{prefix}{k}={json.dumps(v)}"   # JSON is valid YAML
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("sweep")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--only", nargs="*", default=None, help="run only these names")
-    ap.add_argument("extra", nargs="*", help="extra key=value overrides for every run")
-    args = ap.parse_args()
-    # `--only a b x=1` would swallow x=1 into --only; anything with '=' is an override
-    if args.only:
-        args.extra += [o for o in args.only if "=" in o]
-        args.only = [o for o in args.only if "=" not in o]
+    ap.add_argument("--only", help="comma-separated run names")
+    ap.add_argument("overrides", nargs="*", help="extra key=value overrides for every run")
+    args = ap.parse_intermixed_args()
 
     spec = yaml.safe_load(Path(args.sweep).read_text())
     base = spec.get("base", "configs/base.yaml")
-    group = spec.get("group", Path(args.sweep).stem)
     common = spec.get("common", {})
-    out_dir = Path(common.get("out_dir", "runs"))
-
+    group = spec.get("group", Path(args.sweep).stem)
+    only = args.only.split(",") if args.only else None
     results = {}
     for run in spec["runs"]:
-        run = dict(run)
-        name = run.pop("name")
-        if args.only and name not in args.only:
+        name = run["name"]
+        if only and name not in only:
             continue
-        if (out_dir / name / "metrics.json").exists() and not args.force:
-            print(f"skip {name}: already finished")
-            results[name] = "skipped"
+        out_dir = Path(common.get("out_dir", "runs")) / name
+        if (out_dir / "metrics.json").exists() and not args.force:
+            results[name] = "skipped (finished)"
             continue
-        overrides = {**common, **run, "name": name, "wandb_group": group}
-        cmd = [sys.executable, "train.py", "--config", base] + \
-              [f"{k}={json.dumps(v)}" for k, v in overrides.items()] + list(args.extra)
-        print("\n>>> " + " ".join(cmd), flush=True)
-        if args.dry_run:
-            continue
-        rc = subprocess.call(cmd)
-        results[name] = "ok" if rc == 0 else f"FAILED (rc={rc})"
-    if not args.dry_run:
-        print("\nsweep summary:")
-        for k, v in results.items():
-            print(f"  {k:30s} {v}")
+        overrides = {**common, **run, "wandb_group": group}
+        cmd = [sys.executable, "train.py", "--config", base, *flatten(overrides), *args.overrides]
+        print(">>> " + " ".join(cmd), flush=True)
+        if not args.dry_run:
+            rc = subprocess.call(cmd)
+            results[name] = "ok" if rc == 0 else f"FAILED (rc={rc})"
+    for name, status in results.items():
+        print(f"{name:30s} {status}")
 
 
 if __name__ == "__main__":
