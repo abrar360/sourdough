@@ -37,6 +37,8 @@ Fill out the template in the following order:
 6. config.py
 7. smoke_test.py
 
+Try to optimize performance for a 4090 card.
+- for example, things like torch.compile, bfloat16, etc.
 
 Once you complete these, then carefully test the code using the following procedure:
 1. run the smoke test.
