@@ -43,7 +43,7 @@ class Config:
     viz_samples: int = 2
 
     # wandb
-    wandb_project: str = "segmap"
+    wandb_project: str = "convae"
     wandb_entity: str = None
     wandb_mode: str = "disabled"     # "online" | "offline" | "disabled"
     wandb_group: str = None

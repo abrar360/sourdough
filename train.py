@@ -7,8 +7,8 @@ Any Config field can be overridden with key=value (values are parsed as YAML).
 """
 import argparse
 
-from segmap.config import load_config
-from segmap.train import train
+from convae.config import load_config
+from convae.train import train
 
 
 def main():
