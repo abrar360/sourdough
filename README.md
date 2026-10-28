@@ -1,77 +1,45 @@
 # sourdough
 
-Starter code for PyTorch experiments: take a bit for each new project, and the starter lives on.
+Starter code for PyTorch experiments
 
-A small, experiment-agnostic training harness. The harness owns what is the same from one
-experiment to the next; an `Experiment` subclass owns what is not.
+## Instructions
 
-| harness (`trainlib/`) | experiment (`experiments/<name>.py`) |
-|---|---|
-| config file, `key=value` overrides, sweeps | data and splits |
-| AdamW, warmup + cosine/constant lr, grad clipping, bf16, `torch.compile` | model |
-| epoch means, wandb logging, run directory | loss, stats, eval metrics |
-| `best.pt` / `final.pt` selection | figures |
+This repo is an example template that provides a format for converting a working notebook or existing codebase into a lightweight and organized toolkit for rapid experimentation and prototyping.
 
-## Quick start
+The reference code should be present in the /REFERENCE folder. This may consist of a jupyter notebook or an official implementation repository released by the authors of a research paper.
 
-```bash
-pip install -r requirements.txt
-python train.py --config configs/base.yaml                        # the example experiment
-python train.py --config configs/base.yaml name=x lr=3e-4 params.latent=8
-python sweep.py configs/sweeps/example.yaml --dry-run
-python tests/smoke_test.py
+A conv autoencoder (convae) is used as an example throughout.
+
+The template is organized as follows:
+
+```
+train.py            wrapper to kick off training: python train.py --config configs/base.yaml name=x lr=3e-4 latent=8
+sweep.py            wrapper to kick off sweeps: python sweep.py configs/sweeps/example.yaml [--dry-run] [--only a,b] [key=value ...]
+convae/config.py    all configurable parameters
+convae/data.py      dataloaders and preprocessing
+convae/model.py     model architecture
+convae/losses.py    loss functions
+convae/viz.py       plotting and visualization utils
+convae/train.py     training loop
+tests/smoke_test.py sanity checks
 ```
 
-Every run writes `runs/<name>/` with `config.yaml`, `history.json` (one row per epoch),
-`metrics.json` (last row, model info, best epoch), `best.pt`, `final.pt` and
-`viz_<split>_<key>.png`.
+You should replace "convae" with whatever type of model you are implementing.
+For example, if you are working with flow matching then that folder should be named "flow-matching".
 
-## Writing an experiment
+Fill out the template in the following order:
 
-Copy `experiments/example.py` and override what you need; `trainlib/experiment.py` is the
-full interface:
+1. data.py
+2. model.py
+3. losses.py
+4. vis.py
+5. train.py
+6. config.py
+7. smoke_test.py
 
-```python
-class Experiment(trainlib.experiment.Experiment):
-    def build_splits(self) -> dict                   # {"train": Split, "val": Split, ...}
-    def build_model(self) -> nn.Module
-    def train_step(self, model, batch, epoch) -> (loss, {"acc": tensor, ...})
-    # optional
-    def eval_step(self, model, batch) -> {"loss": ..., "acc": ...}   # default: train_step
-    def evaluate(self, model, name, split) -> dict                   # default: mean of eval_step
-    def model_info(self, model) -> dict                              # logged once
-    def visualize(self, model, name, split) -> {"key": Figure}
-```
 
-Point `experiment:` in the YAML at the class. Experiment options go under `params:` and are
-available as `self.p`; nothing else in the config changes.
+Once you complete these, then carefully test the code using the following procedure:
+1. run the smoke test.
+2. attempt a small end to end training job on mock data or a tiny subset of data
+3. do one final check to make sure that your implementation is a faithful reproduction of the reference notebook or existing codebase you are porting.
 
-**Splits** are anything with `__len__` and `batch(idx)`. `TensorSplit` keeps a dict of tensors
-on the GPU, or pinned on the CPU with `store_device="cpu"` when they do not fit, and gathers
-batches by index. Augmentation belongs in `train_step`.
-
-**Stats** returned by `train_step` and `eval_step` are per-batch means as scalar tensors. The
-harness averages them over the epoch, weighted by batch size, with one host sync per epoch, and
-logs them as `train/<key>` and `<split>/<key>`. Override `evaluate` for metrics that are not
-batch means.
-
-**Selection.** `select_metric` names any logged `<split>/<key>`; `select_mode` is `min` or `max`.
-Keep one split for selection and another, never used for it, as the clean test number.
-
-**Long runs and annealing.** `decay: none` trains at a constant lr after warmup, so a run can go
-on as long as it keeps improving. To anneal from where it stopped improving, start a new run from
-its checkpoint with the optimizer state restored and no warmup:
-
-```bash
-python train.py --config c.yaml name=long   decay=none epochs=5000
-python train.py --config c.yaml name=anneal init_from=runs/long/best.pt warmup_steps=0 epochs=100
-```
-
-`weights_only: true` loads only the weights (a cold optimizer and a warmup), for fine-tuning.
-
-**Sweeps.** A sweep file names a base config, a wandb group, `common` overrides, and a list of
-runs; each run's keys are overrides on top of that. Finished runs are skipped.
-
-## License
-
-MIT, see `LICENSE`.

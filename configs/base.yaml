@@ -1,18 +1,17 @@
-# Top-level keys are harness options (trainlib/config.py). `params` is passed to the experiment.
+# Every key is a field of segmap/config.py and can be overridden on the command line.
 name: example
 out_dir: runs
 seed: 0
 device: auto
 
-experiment: experiments.example:Experiment
-params:
-  H: 96
-  W: 128
-  n_train: 256
-  n_val: 32
-  widths: [16, 32, 64]
-  latent: 4
-  viz_samples: 2
+H: 96
+W: 128
+n_train: 256
+n_val: 32
+data_on_cpu: false
+
+widths: [16, 32, 64]
+latent: 4
 
 epochs: 10
 batch_size: 16
@@ -20,17 +19,18 @@ lr: 1.0e-3
 weight_decay: 1.0e-4
 warmup_steps: 20
 decay: cosine
-init_from: null
-weights_only: false
 grad_clip: 1.0
 amp: true
 compile: true
+init_from: null
+weights_only: false
 
 eval_every: 1
 select_metric: val/acc
 select_mode: max
+viz_samples: 2
 
-wandb_project: experiments
+wandb_project: segmap
 wandb_entity: null
 wandb_mode: disabled
 wandb_group: null

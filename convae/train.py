@@ -1,23 +1,24 @@
-"""The training loop. Experiment-agnostic: data, model, loss, metrics and plots come from the
-Experiment; this file owns AdamW + warmup/decay schedule, AMP, torch.compile, grad clipping,
-running means, wandb logging, checkpoints and the run directory."""
 import contextlib
 import json
 import math
 import time
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm.auto import tqdm
 
 from .config import Config
-from .data import iter_batches
-from .experiment import load_experiment
-from .logger import Logger
+from .data import build_splits, iter_batches
+from .losses import step
+from .model import build_model, model_info
+from .viz import figure
+
+try:
+    import wandb
+except ImportError:  # optional; wandb_mode=disabled works without it
+    wandb = None
 
 PBAR_EVERY = 50   # steps between progress-bar loss refreshes (each one is a host sync)
 
@@ -36,13 +37,39 @@ def lr_lambda(cfg, total_steps):
     """Linear warmup over `warmup_steps`, then cosine to 0 or flat for the rest of the run."""
     warm = min(cfg.warmup_steps, total_steps)
 
-    def f(step):
-        if step < warm:
-            return (step + 1) / warm
+    def f(s):
+        if s < warm:
+            return (s + 1) / warm
         if cfg.decay == "none":
             return 1.0
-        return 0.5 * (1 + math.cos(math.pi * (step - warm) / max(total_steps - warm, 1)))
+        return 0.5 * (1 + math.cos(math.pi * (s - warm) / max(total_steps - warm, 1)))
     return f
+
+
+class Meter:
+    """Epoch means of per-batch stats, weighted by batch size; one host sync in result()."""
+
+    def __init__(self):
+        self.sums, self.n = {}, 0
+
+    def add(self, stats, n):
+        for k, v in stats.items():
+            self.sums[k] = self.sums.get(k, 0) + v.detach().float() * n
+        self.n += n
+
+    def result(self):
+        return {k: (v / self.n).item() for k, v in self.sums.items()}
+
+
+@torch.no_grad()
+def evaluate(model, split, cfg):
+    model.eval()
+    meter = Meter()
+    for idx in iter_batches(len(split), cfg.batch_size):
+        loss, stats = step(model, split.batch(idx))
+        meter.add({"loss": loss, **stats}, len(idx))
+    model.train()
+    return meter.result()
 
 
 def train(cfg: Config):
@@ -59,16 +86,15 @@ def train(cfg: Config):
     cfg.dump(out_dir / "config.yaml")
     print(f"device={device} amp={cuda and cfg.amp} compile={cuda and cfg.compile} -> {out_dir}")
 
-    # ---- experiment: data + model
-    exp = load_experiment(cfg.experiment)(cfg, device)
-    splits = exp.build_splits()
+    # ---- data, model
+    splits = build_splits(cfg, device)
     train_split = splits["train"]
     eval_splits = {k: v for k, v in splits.items() if k != "train"}
-    model = exp.build_model().to(device)
-    info = {**exp.model_info(model), **{f"{k}_samples": len(s) for k, s in splits.items()}}
+    model = build_model(cfg).to(device)
+    info = {**model_info(model), **{f"{k}_samples": len(s) for k, s in splits.items()}}
     print(json.dumps(info, indent=2))
 
-    # ---- optimiser, schedule, compile
+    # ---- optimiser, schedule, checkpoint init, compile
     steps_per_epoch = len(train_split) // cfg.batch_size
     assert steps_per_epoch > 0, "batch_size larger than the training set"
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, fused=cuda)
@@ -80,7 +106,15 @@ def train(cfg: Config):
             optimizer.load_state_dict(ckpt["optimizer"])
         print(f"initialised from {cfg.init_from} (epoch {ckpt['epoch']}, optimizer {'cold' if cfg.weights_only else 'restored'})")
     run_model = torch.compile(model) if cuda and cfg.compile else model
-    logger = Logger(cfg, info)
+
+    # ---- logging
+    use_wandb = cfg.wandb_mode != "disabled"
+    if use_wandb:
+        assert wandb is not None, "wandb is not installed; pip install wandb or set wandb_mode=disabled"
+        wandb.init(project=cfg.wandb_project, entity=cfg.wandb_entity, name=cfg.name, group=cfg.wandb_group,
+                   tags=cfg.wandb_tags, mode=cfg.wandb_mode, config={**cfg.to_dict(), **info})
+        wandb.define_metric("epoch")
+        wandb.define_metric("*", step_metric="epoch")
 
     def save(path, epoch, **extra):
         torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
@@ -93,23 +127,20 @@ def train(cfg: Config):
     t_start = time.time()
     for epoch in range(1, cfg.epochs + 1):
         model.train()
-        sums, n_seen, t0 = {}, 0, time.time()
+        meter, t0 = Meter(), time.time()
         pbar = tqdm(total=steps_per_epoch, desc=f"epoch {epoch}/{cfg.epochs}", leave=False)
-        for step, idx in enumerate(iter_batches(len(train_split), cfg.batch_size, shuffle=True,
-                                                drop_last=True, generator=perm_gen)):
+        for i, idx in enumerate(iter_batches(len(train_split), cfg.batch_size, shuffle=True,
+                                             drop_last=True, generator=perm_gen)):
             with autocast:
-                loss, stats = exp.train_step(run_model, train_split.batch(idx), epoch)
+                loss, stats = step(run_model, train_split.batch(idx))
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             if cfg.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
             scheduler.step()
-
-            for k, v in {"loss": loss, **stats}.items():
-                sums[k] = sums.get(k, 0) + v.detach().float() * len(idx)
-            n_seen += len(idx)
-            if step % PBAR_EVERY == 0:
+            meter.add({"loss": loss, **stats}, len(idx))
+            if i % PBAR_EVERY == 0:
                 pbar.set_postfix(loss=f"{loss.item():.5f}")
             pbar.update(1)
         pbar.close()
@@ -118,19 +149,19 @@ def train(cfg: Config):
         epoch_time = time.time() - t0
 
         row = {"epoch": epoch, "lr": scheduler.get_last_lr()[0], "epoch_time": epoch_time,
-               "samples_per_sec": n_seen / epoch_time}
-        row.update({f"train/{k}": (v / n_seen).item() for k, v in sums.items()})
+               "samples_per_sec": meter.n / epoch_time}
+        row.update({f"train/{k}": v for k, v in meter.result().items()})
         if epoch % cfg.eval_every == 0 or epoch == cfg.epochs:
-            model.eval()
             with autocast:
                 for name, split in eval_splits.items():
-                    row.update({f"{name}/{k}": v for k, v in exp.evaluate(model, name, split).items()})
+                    row.update({f"{name}/{k}": v for k, v in evaluate(model, split, cfg).items()})
             if cfg.select_metric in row and (best is None or better(row[cfg.select_metric], best)):
                 best, best_epoch = row[cfg.select_metric], epoch
                 save(out_dir / "best.pt", epoch, selected_on=cfg.select_metric, selected_value=best)
             row["best_epoch"] = best_epoch
         history.append(row)
-        logger.log(row)
+        if use_wandb:
+            wandb.log(row)
         losses = [k for k in row if k.endswith("/loss")]
         print(f"epoch {epoch:3d} | " + " | ".join(f"{k} {row[k]:.5f}" for k in losses)
               + f" | lr {row['lr']:.2e} | {epoch_time:.0f}s" + ("  *" if best_epoch == epoch else ""))
@@ -141,13 +172,15 @@ def train(cfg: Config):
     (out_dir / "history.json").write_text(json.dumps(history, indent=2))
     save(out_dir / "final.pt", cfg.epochs)
     model.eval()
-    with torch.no_grad(), autocast:
+    with autocast:
         for name, split in splits.items():
-            for key, fig in exp.visualize(model, name, split).items():
-                fig.savefig(out_dir / f"viz_{name}_{key}.png", dpi=80)
-                logger.image(f"{name}/{key}", fig, cfg.epochs)
-                plt.close(fig)
-    logger.summary(final)
-    logger.finish()
+            fig = figure(model, name, split, cfg.viz_samples)
+            fig.savefig(out_dir / f"viz_{name}.png", dpi=80)
+            if use_wandb:
+                wandb.log({f"{name}/viz": wandb.Image(fig), "epoch": cfg.epochs})
+            plt.close(fig)
+    if use_wandb:
+        wandb.run.summary.update(final)
+        wandb.finish()
     print(f"done in {final['total_time'] / 60:.1f} min -> {out_dir}")
     return final

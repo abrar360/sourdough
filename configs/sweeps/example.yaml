@@ -1,10 +1,9 @@
-# python sweep.py configs/sweeps/example.yaml [--dry-run] [--only name ...]
-# `common` and each run are key=value overrides; nested params merge with the base config.
+# python sweep.py configs/sweeps/example.yaml [--dry-run] [--only name,name]
 base: configs/base.yaml
 group: example-latent
 common:
   epochs: 10
 runs:
-  - {name: latent2, params: {latent: 2}}
-  - {name: latent4, params: {latent: 4}}
-  - {name: latent8, params: {latent: 8}, lr: 2.0e-3}
+  - {name: latent2, latent: 2}
+  - {name: latent4, latent: 4}
+  - {name: latent8, latent: 8, lr: 2.0e-3}

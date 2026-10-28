@@ -10,9 +10,7 @@ Sweep file:
     group: example-latent          # wandb group (default: the sweep file stem)
     common: {epochs: 10}           # overrides applied to every run
     runs:
-      - name: latent8              # -> runs/latent8
-        params: {latent: 8}        # nested keys merge with the base config
-        lr: 2.0e-3
+      - {name: latent8, latent: 8, lr: 2.0e-3}   # -> runs/latent8
 
 Finished runs (metrics.json exists) are skipped unless --force.
 """
@@ -23,15 +21,6 @@ import sys
 from pathlib import Path
 
 import yaml
-
-
-def flatten(d, prefix=""):
-    """{"params": {"latent": 8}, "lr": 1} -> ["params.latent=8", "lr=1"]"""
-    for k, v in d.items():
-        if isinstance(v, dict):
-            yield from flatten(v, f"{prefix}{k}.")
-        else:
-            yield f"{prefix}{k}={json.dumps(v)}"   # JSON is valid YAML
 
 
 def main():
@@ -53,12 +42,12 @@ def main():
         name = run["name"]
         if only and name not in only:
             continue
-        out_dir = Path(common.get("out_dir", "runs")) / name
-        if (out_dir / "metrics.json").exists() and not args.force:
+        if (Path(common.get("out_dir", "runs")) / name / "metrics.json").exists() and not args.force:
             results[name] = "skipped (finished)"
             continue
         overrides = {**common, **run, "wandb_group": group}
-        cmd = [sys.executable, "train.py", "--config", base, *flatten(overrides), *args.overrides]
+        cmd = [sys.executable, "train.py", "--config", base,
+               *(f"{k}={json.dumps(v)}" for k, v in overrides.items()), *args.overrides]   # JSON is valid YAML
         print(">>> " + " ".join(cmd), flush=True)
         if not args.dry_run:
             rc = subprocess.call(cmd)

@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """Train one run.
 
-    python train.py --config configs/base.yaml name=my_run lr=3e-4 params.width=64
+    python train.py --config configs/base.yaml name=my_run lr=3e-4 latent=8
 
-Harness options are top-level Config fields; experiment options go under params.* (YAML values).
+Any Config field can be overridden with key=value (values are parsed as YAML).
 """
 import argparse
 
-from trainlib.config import load_config
-from trainlib.train import train
+from segmap.config import load_config
+from segmap.train import train
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="configs/base.yaml")
-    ap.add_argument("overrides", nargs="*", help="key=value overrides (dotted keys for params)")
+    ap.add_argument("overrides", nargs="*", help="key=value overrides")
     args = ap.parse_args()
     train(load_config(args.config, args.overrides))
 
