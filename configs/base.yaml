@@ -1,4 +1,4 @@
-# Every key is a field of segmap/config.py and can be overridden on the command line.
+# Every key is a field of convae/config.py and can be overridden on the command line.
 name: example
 out_dir: runs
 seed: 0
